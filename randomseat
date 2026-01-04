@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>文創教室隨機座位表 (進階版)</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;700&display=swap');
+        
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f3f4f6; }
+
+        /* 列印設定 */
+        @media print {
+            .no-print { display: none !important; }
+            .print-border { border: 1px solid black; }
+            body { background-color: white; }
+            #classroom-container { border: none; shadow: none; }
+        }
+
+        /* 座位卡片樣式 */
+        .seat-card {
+            transition: all 0.2s;
+            user-select: none;
+        }
+
+        /* 缺席樣式 */
+        .student-active.absent {
+            background-color: #fee2e2;
+            border-color: #ef4444;
+            color: #b91c1c;
+        }
+        .student-active.absent::after {
+            content: '(缺席)';
+            font-size: 0.7em;
+            display: block;
+            color: #dc2626;
+        }
+
+        /* 拖曳中的樣式 */
+        .dragging {
+            opacity: 0.5;
+            border: 2px dashed #4f46e5;
+            transform: scale(0.95);
+        }
+
+        /* 鎖定空位樣式 */
+        .seat-locked {
+            background-color: #e5e7eb; /* gray-200 */
+            background-image: repeating-linear-gradient(45deg, transparent, transparent 5px, #d1d5db 5px, #d1d5db 10px);
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: #9ca3af;
+        }
+
+        /* 模式切換按鈕樣式 */
+        .toggle-checkbox:checked {
+            right: 0;
+            border-color: #4f46e5;
+        }
+        .toggle-checkbox:checked + .toggle-label {
+            background-color: #4f46e5;
+        }
+    </style>
+</head>
+<body class="p-4 md:p-8 min-h-screen flex flex-col">
+
+    <!-- Header -->
+    <header class="mb-6 flex flex-col md:flex-row justify-between items-center bg-white p-4 rounded-lg shadow no-print">
+        <div>
+            <h1 class="text-2xl font-bold text-gray-800"><i class="fa-solid fa-chair mr-2 text-indigo-600"></i>文創教室座位表 <span class="text-sm font-normal text-gray-500 bg-gray-100 px-2 py-1 rounded">進階版</span></h1>
+            <p class="text-sm text-gray-500 mt-1">支援：拖曳換位、鎖定空位、缺席點名 (上限36人 / 9桌)</p>
+        </div>
+        <div class="mt-4 md:mt-0 text-right">
+            <div id="clock" class="text-xl font-mono font-bold text-indigo-600"></div>
+            <div id="date" class="text-sm text-gray-600"></div>
+        </div>
+    </header>
+
+    <!-- Controls Area -->
+    <div class="no-print grid grid-cols-1 lg:grid-cols-12 gap-6 mb-8">
+        
+        <!-- Left: Input Data -->
+        <div class="lg:col-span-4 bg-white p-4 rounded-lg shadow flex flex-col">
+            <label class="block text-sm font-medium text-gray-700 mb-2">
+                <i class="fa-regular fa-paste mr-1"></i> 1. 貼上名單
+            </label>
+            <textarea id="inputData" class="flex-grow p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 text-sm font-mono h-32" placeholder="支援格式：&#10;1. 班級+座號+姓名 (3欄)&#10;2. 座號+姓名 (2欄)&#10;範例：&#10;103	1	王小明&#10;05	李大華"></textarea>
+            
+            <div class="mt-3 flex gap-2">
+                <button onclick="parseAndShuffle()" class="flex-1 bg-indigo-600 text-white py-2 px-4 rounded hover:bg-indigo-700 transition font-bold shadow">
+                    <i class="fa-solid fa-shuffle mr-1"></i> 隨機排列
+                </button>
+                <button onclick="clearAll()" class="px-3 py-2 border border-gray-300 rounded hover:bg-red-50 text-red-600" title="清空所有資料">
+                    <i class="fa-solid fa-trash"></i>
+                </button>
+            </div>
+            <p class="text-xs text-gray-400 mt-1">* 隨機排列時會避開「鎖定」的座位</p>
+        </div>
+
+        <!-- Middle: Mode & Status -->
+        <div class="lg:col-span-4 flex flex-col gap-4">
+            <!-- Mode Toggle -->
+            <div class="bg-white p-4 rounded-lg shadow border-l-4 border-indigo-500">
+                <h3 class="font-bold text-gray-800 mb-3"><i class="fa-solid fa-sliders mr-2"></i>2. 模式設定</h3>
+                
+                <div class="flex items-center justify-between bg-gray-50 p-3 rounded mb-2">
+                    <span class="text-sm font-bold text-gray-700">操作模式</span>
+                    <div class="flex items-center">
+                        <span class="text-xs mr-2 font-bold" id="mode-text-attendance">點名/拖曳</span>
+                        <div class="relative inline-block w-12 mr-2 align-middle select-none transition duration-200 ease-in">
+                            <input type="checkbox" name="toggle" id="modeToggle" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-white border-4 appearance-none cursor-pointer border-gray-300 left-0 transition-all duration-300" onclick="toggleMode()">
+                            <label for="modeToggle" class="toggle-label block overflow-hidden h-6 rounded-full bg-gray-300 cursor-pointer transition-colors duration-300"></label>
+                        </div>
+                        <span class="text-xs font-bold text-gray-400" id="mode-text-lock">鎖定空位</span>
+                    </div>
+                </div>
+                
+                <div id="instruction-text" class="text-xs text-blue-600 bg-blue-50 p-2 rounded">
+                    <i class="fa-solid fa-info-circle"></i> 目前：<strong>點名模式</strong>。點擊學生可標記缺席，拖曳可交換座位。
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="bg-white p-4 rounded-lg shadow">
+                <div class="flex justify-between items-center mb-2">
+                    <span class="text-sm text-gray-600">總人數</span>
+                    <span id="countTotal" class="font-bold text-lg">0</span>
+                </div>
+                <div class="flex justify-between items-center border-t pt-2">
+                    <span class="text-sm text-gray-600">缺席人數</span>
+                    <span id="countAbsent" class="font-bold text-lg text-red-600">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: Export -->
+        <div class="lg:col-span-4 bg-white p-4 rounded-lg shadow flex flex-col justify-center">
+            <h3 class="font-bold text-gray-800 mb-3"><i class="fa-solid fa-file-export mr-2"></i>3. 匯出紀錄</h3>
+            <button onclick="exportToWord()" class="w-full bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 transition shadow-sm mb-3 text-left">
+                <i class="fa-solid fa-file-word mr-2"></i> 下載座位表 (.doc)
+                <span class="float-right text-xs opacity-70 mt-1">列印用</span>
+            </button>
+            <button onclick="exportToExcel()" class="w-full bg-green-600 text-white py-2 px-4 rounded hover:bg-green-700 transition shadow-sm text-left">
+                <i class="fa-solid fa-file-excel mr-2"></i> 下載名單 (.xls)
+                <span class="float-right text-xs opacity-70 mt-1">含缺席紀錄</span>
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Seating Area -->
+    <div id="classroom-container" class="bg-white p-6 rounded-lg shadow-lg border-t-8 border-indigo-600 min-w-[900px] overflow-x-auto mx-auto mb-10">
+        
+        <!-- Print Header (Hidden on screen) -->
+        <div class="hidden" id="print-header">
+            <h2 class="text-3xl font-bold text-center mb-2">文創教室座位表</h2>
+            <p class="text-center text-lg mb-4" id="print-time"></p>
+        </div>
+
+        <div class="w-full bg-gray-800 text-white text-center py-2 rounded mb-8 tracking-widest text-lg shadow-md">
+            講 台 / 黑 板
+        </div>
+
+        <!-- 3x3 Grid of Tables -->
+        <div class="grid grid-cols-3 gap-8 w-full" id="tables-grid">
+            <!-- JS will populate this -->
+        </div>
+    </div>
+
+    <!-- Hidden Template for Excel Export -->
+    <script>
+        // Global State
+        const TOTAL_SEATS = 36;
+        const TABLES = 9;
+        const SEATS_PER_TABLE = 4;
+
+        // gridState: Array of 36 items. 
+        // Each item can be: null (empty), 'LOCKED' (fixed empty), or {id, name, displayId, originalClass, originalSeat}
+        let gridState = new Array(TOTAL_SEATS).fill(null);
+        let absentSet = new Set(); // Stores student IDs
+        let isLockMode = false;
+
+        // Initialization
+        window.onload = function() {
+            renderGrid();
+            updateTime();
+            setInterval(updateTime, 1000);
+        };
+
+        // --- Core Logic ---
+
+        function parseAndShuffle() {
+            const rawText = document.getElementById('inputData').value.trim();
+            if (!rawText) {
+                alert('請先輸入名單資料！');
+                return;
+            }
+
+            // 1. Parse Students
+            let newStudents = [];
+            const lines = rawText.split('\n');
+            lines.forEach(line => {
+                // Handle various splitters (tab or multiple spaces)
+                let parts = line.split(/\t+/);
+                if (parts.length < 2) parts = line.split(/\s+/);
+                // Filter out empty parts
+                parts = parts.filter(p => p.trim() !== '');
+                
+                if (parts.length >= 3) {
+                    // Standard: Class | Seat | Name
+                    const cls = parts[0].trim();
+                    const seat = parts[1].trim();
+                    const name = parts[2].trim();
+                    
+                    const cleanClass = cls.replace(/\D/g, ''); 
+                    const cleanSeat = seat.replace(/\D/g, '');
+                    const paddedSeat = cleanSeat.length === 1 ? '0' + cleanSeat : cleanSeat;
+                    const displayId = cleanClass + paddedSeat;
+
+                    newStudents.push({
+                        id: Math.random().toString(36).substr(2, 9),
+                        displayId: displayId,
+                        name: name,
+                        originalClass: cls,
+                        originalSeat: seat
+                    });
+                } else if (parts.length === 2) {
+                    // Two Columns Logic
+                    const col1 = parts[0].trim();
+                    const col2 = parts[1].trim();
+                    
+                    // Check if col2 looks like a name (contains non-digits)
+                    // If col2 is just numbers, it might be Class | Seat
+                    const isCol2Numeric = /^\d+$/.test(col2.replace(/\D/g, ''));
+
+                    if (!isCol2Numeric) {
+                        // Scenario: Seat | Name
+                        const cleanSeat = col1.replace(/\D/g, '');
+                        const paddedSeat = cleanSeat.length === 1 ? '0' + cleanSeat : cleanSeat;
+                        
+                        newStudents.push({
+                            id: Math.random().toString(36).substr(2, 9),
+                            displayId: paddedSeat, // No class prefix
+                            name: col2,
+                            originalClass: '',
+                            originalSeat: col1
+                        });
+                    } else {
+                        // Scenario: Class | Seat (No Name)
+                        const cleanClass = col1.replace(/\D/g, '');
+                        const cleanSeat = col2.replace(/\D/g, '');
+                        const paddedSeat = cleanSeat.length === 1 ? '0' + cleanSeat : cleanSeat;
+                        
+                        newStudents.push({
+                            id: Math.random().toString(36).substr(2, 9),
+                            displayId: cleanClass + paddedSeat,
+                            name: '同學', // Default placeholder
+                            originalClass: col1,
+                            originalSeat: col2
+                        });
+                    }
+                }
+            });
+
+            // 2. Determine available slots (Non-locked)
+            let availableIndices = [];
+            for(let i=0; i<TOTAL_SEATS; i++) {
+                if (gridState[i] !== 'LOCKED') {
+                    availableIndices.push(i);
+                }
+            }
+
+            // Validation
+            if (newStudents.length > availableIndices.length) {
+                alert(`學生人數 (${newStudents.length}) 超過可用座位數 (${availableIndices.length})！\n請解鎖一些座位或減少人數。`);
+                return;
+            }
+
+            // 3. Shuffle Students
+            shuffleArray(newStudents);
+
+            // 4. Fill Grid (Keep locks, clear old students, place new ones)
+            // First, clear all non-locked slots in current grid
+            for(let i=0; i<TOTAL_SEATS; i++) {
+                if(gridState[i] !== 'LOCKED') {
+                    gridState[i] = null;
+                }
+            }
+
+            // Place students
+            newStudents.forEach((student, index) => {
+                const targetSlot = availableIndices[index];
+                gridState[targetSlot] = student;
+            });
+
+            // Reset Attendance
+            absentSet.clear();
+            renderGrid();
+        }
+
+        function shuffleArray(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+
+        function clearAll() {
+            if(confirm('確定要清空所有學生名單與座位安排嗎？(鎖定的空位將保留)')) {
+                document.getElementById('inputData').value = '';
+                // Clear students but keep locks
+                for(let i=0; i<TOTAL_SEATS; i++) {
+                    if(gridState[i] !== 'LOCKED') gridState[i] = null;
+                }
+                absentSet.clear();
+                renderGrid();
+            }
+        }
+
+        // --- Interaction Logic (Lock & Attendance & Drag) ---
+
+        function toggleMode() {
+            const toggle = document.getElementById('modeToggle');
+            isLockMode = toggle.checked;
+
+            const attendText = document.getElementById('mode-text-attendance');
+            const lockText = document.getElementById('mode-text-lock');
+            const instruct = document.getElementById('instruction-text');
+
+            if (isLockMode) {
+                attendText.classList.replace('text-gray-700', 'text-gray-400');
+                lockText.classList.replace('text-gray-400', 'text-gray-700');
+                lockText.classList.add('font-bold');
+                instruct.innerHTML = '<i class="fa-solid fa-lock"></i> 目前：<strong>鎖定模式</strong>。點擊格子可設定為「不排座位的空位」。';
+                instruct.className = "text-xs text-indigo-600 bg-indigo-50 p-2 rounded";
+            } else {
+                lockText.classList.replace('text-gray-700', 'text-gray-400');
+                attendText.classList.replace('text-gray-400', 'text-gray-700');
+                instruct.innerHTML = '<i class="fa-solid fa-info-circle"></i> 目前：<strong>點名模式</strong>。點擊學生標記缺席，拖曳可交換座位。';
+                instruct.className = "text-xs text-blue-600 bg-blue-50 p-2 rounded";
+            }
+            renderGrid(); // Re-render to update cursors/visuals
+        }
+
+        function handleSeatClick(index) {
+            if (isLockMode) {
+                // Toggle Lock Status
+                if (gridState[index] === 'LOCKED') {
+                    gridState[index] = null; // Unlock
+                } else {
+                    // Even if there is a student, we can overwrite with lock (maybe confirm?)
+                    // For simplicity, just overwrite. If user wants to keep student, they should swap first.
+                    if (gridState[index] && typeof gridState[index] === 'object') {
+                        // Optional: Return student to pool? No, simpler to just overwrite implies removing from seat.
+                    }
+                    gridState[index] = 'LOCKED';
+                }
+                renderGrid();
+            } else {
+                // Attendance Mode
+                const item = gridState[index];
+                if (item && item !== 'LOCKED') {
+                    // Toggle Absent
+                    if (absentSet.has(item.id)) {
+                        absentSet.delete(item.id);
+                    } else {
+                        absentSet.add(item.id);
+                    }
+                    renderGrid(); // Re-render to show red bg
+                }
+            }
+        }
+
+        // --- Drag and Drop Logic ---
+
+        let dragSrcIndex = null;
+
+        function handleDragStart(e, index) {
+            if (isLockMode) {
+                e.preventDefault(); // Disable drag in lock mode
+                return;
+            }
+            dragSrcIndex = index;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', index); // Firefox needs this
+            e.target.classList.add('dragging');
+        }
+
+        function handleDragOver(e) {
+            if (e.preventDefault) e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+            return false;
+        }
+
+        function handleDragEnter(e) {
+            e.target.closest('.seat-card')?.classList.add('ring-2', 'ring-indigo-400');
+        }
+
+        function handleDragLeave(e) {
+            e.target.closest('.seat-card')?.classList.remove('ring-2', 'ring-indigo-400');
+        }
+
+        function handleDrop(e, targetIndex) {
+            if (e.stopPropagation) e.stopPropagation();
+            
+            // Remove visual cues
+            document.querySelectorAll('.seat-card').forEach(el => el.classList.remove('ring-2', 'ring-indigo-400', 'dragging'));
+
+            if (dragSrcIndex === null || dragSrcIndex === targetIndex) return false;
+            if (isLockMode) return false;
+
+            // Logic: Swap gridState[dragSrcIndex] and gridState[targetIndex]
+            // Allow swapping with empty slots.
+            // But if target is LOCKED, prevent drop? Let's prevent dropping onto Locked.
+            
+            if (gridState[targetIndex] === 'LOCKED') {
+                alert("無法將學生移動到鎖定的座位！");
+                return false;
+            }
+
+            const sourceItem = gridState[dragSrcIndex];
+            const targetItem = gridState[targetIndex];
+
+            // Perform Swap
+            gridState[targetIndex] = sourceItem;
+            gridState[dragSrcIndex] = targetItem;
+
+            renderGrid();
+            return false;
+        }
+
+        function handleDragEnd(e) {
+            document.querySelectorAll('.seat-card').forEach(el => el.classList.remove('dragging', 'ring-2', 'ring-indigo-400'));
+        }
+
+
+        // --- Rendering ---
+
+        function renderGrid() {
+            const container = document.getElementById('tables-grid');
+            container.innerHTML = '';
+            
+            let studentCount = 0;
+
+            for (let t = 0; t < TABLES; t++) {
+                // Create Table Box
+                const tableDiv = document.createElement('div');
+                tableDiv.className = 'border-2 border-gray-300 rounded-lg p-3 relative bg-amber-50 shadow-sm';
+                
+                // Table Label
+                tableDiv.innerHTML = `<div class="absolute -top-3 left-3 bg-indigo-100 text-indigo-800 text-xs font-bold px-2 py-0.5 rounded border border-indigo-200">第 ${t + 1} 桌</div>`;
+
+                // Seat Grid (2x2)
+                const seatGrid = document.createElement('div');
+                seatGrid.className = 'grid grid-cols-2 gap-2 mt-2';
+
+                for (let s = 0; s < SEATS_PER_TABLE; s++) {
+                    const globalIndex = t * SEATS_PER_TABLE + s;
+                    const item = gridState[globalIndex];
+                    
+                    const seatDiv = document.createElement('div');
+                    seatDiv.className = 'seat-card border rounded h-20 flex flex-col justify-center items-center relative';
+                    
+                    // Base styles
+                    if (item === 'LOCKED') {
+                        seatDiv.classList.add('seat-locked');
+                        seatDiv.innerHTML = '<i class="fa-solid fa-ban text-2xl"></i>';
+                        if(isLockMode) seatDiv.classList.add('ring-2', 'ring-red-400');
+                    } else if (item && typeof item === 'object') {
+                        // It's a student
+                        studentCount++;
+                        const isAbsent = absentSet.has(item.id);
+                        seatDiv.classList.add('bg-white', 'border-gray-400', 'hover:shadow-md', 'student-active');
+                        seatDiv.setAttribute('draggable', 'true');
+                        if (isLockMode) seatDiv.classList.add('cursor-pointer'); 
+                        else seatDiv.classList.add('cursor-grab');
+
+                        if (isAbsent) seatDiv.classList.add('absent');
+
+                        seatDiv.innerHTML = `
+                            <div class="text-lg font-mono font-bold text-gray-700 leading-none mb-1 pointer-events-none">${item.displayId}</div>
+                            <div class="text-lg font-bold text-gray-900 leading-tight pointer-events-none">${item.name}</div>
+                        `;
+
+                        // Add Drag Events
+                        seatDiv.addEventListener('dragstart', (e) => handleDragStart(e, globalIndex));
+                        seatDiv.addEventListener('dragend', handleDragEnd);
+
+                    } else {
+                        // Empty Slot
+                        seatDiv.className = 'seat-card border border-dashed border-gray-300 rounded bg-transparent p-2 h-20 flex justify-center items-center opacity-60';
+                        if (isLockMode) seatDiv.classList.add('cursor-pointer', 'hover:bg-gray-100');
+                        seatDiv.innerHTML = '<span class="text-gray-300 text-xs">空</span>';
+                    }
+
+                    // Common Events (Click & Drop Targets)
+                    seatDiv.onclick = () => handleSeatClick(globalIndex);
+                    
+                    // Allow dropping onto empty slots or swapping students
+                    seatDiv.addEventListener('dragover', handleDragOver);
+                    seatDiv.addEventListener('dragenter', handleDragEnter);
+                    seatDiv.addEventListener('dragleave', handleDragLeave);
+                    seatDiv.addEventListener('drop', (e) => handleDrop(e, globalIndex));
+
+                    seatGrid.appendChild(seatDiv);
+                }
+
+                tableDiv.appendChild(seatGrid);
+                container.appendChild(tableDiv);
+            }
+
+            // Update Stats
+            document.getElementById('countTotal').innerText = studentCount;
+            document.getElementById('countAbsent').innerText = absentSet.size;
+        }
+
+        // --- Utilities ---
+        function updateTime() {
+            const now = new Date();
+            const days = ['週日', '週一', '週二', '週三', '週四', '週五', '週六'];
+            const dateStr = `${now.getFullYear()}/${(now.getMonth()+1).toString().padStart(2,'0')}/${now.getDate().toString().padStart(2,'0')} (${days[now.getDay()]})`;
+            const timeStr = `${now.getHours().toString().padStart(2,'0')}:${now.getMinutes().toString().padStart(2,'0')}:${now.getSeconds().toString().padStart(2,'0')}`;
+            
+            document.getElementById('date').textContent = dateStr;
+            document.getElementById('clock').textContent = timeStr;
+            document.getElementById('print-time').textContent = `列印時間：${dateStr} ${timeStr}`;
+        }
+
+        function getDateTimeString() {
+            const now = new Date();
+            return `${now.getFullYear()}${String(now.getMonth()+1).padStart(2,'0')}${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}`;
+        }
+
+        // --- Exports ---
+        
+        function exportToWord() {
+            // Check if any students exist
+            if (!gridState.some(x => x && typeof x === 'object')) {
+                alert("無學生資料可匯出！");
+                return;
+            }
+
+            // Generate simpler HTML string for Word
+            const timeStr = document.getElementById('print-time').innerText;
+            let wordHTML = `
+                <h2 style="text-align:center; font-size:24px; margin-bottom:10px;">文創教室座位表</h2>
+                <p style="text-align:center; margin-bottom:20px; font-size:10pt;">${timeStr}</p>
+                <div style="width:100%; background:#333; color:#fff; text-align:center; padding:5px; margin-bottom:20px;">講 台</div>
+                <table style="width:100%; border-collapse: separate; border-spacing: 15px;">
+            `;
+
+            for(let r=0; r<3; r++) { // Rows of tables
+                wordHTML += `<tr>`;
+                for(let c=0; c<3; c++) { // Tables
+                    let tIndex = r*3 + c;
+                    wordHTML += `<td style="border: 2px solid #000; padding: 10px; vertical-align: top; width: 33%;">`;
+                    wordHTML += `<div style="font-size:10pt; margin-bottom:5px;">第 ${tIndex+1} 桌</div>`;
+                    
+                    // Inner Table (Seats)
+                    wordHTML += `<table style="width:100%; border-collapse: collapse;">`;
+                    // Row 1
+                    wordHTML += `<tr>${getSeatHTML(tIndex*4)} ${getSeatHTML(tIndex*4+1)}</tr>`;
+                    // Row 2
+                    wordHTML += `<tr>${getSeatHTML(tIndex*4+2)} ${getSeatHTML(tIndex*4+3)}</tr>`;
+                    wordHTML += `</table></td>`;
+                }
+                wordHTML += `</tr>`;
+            }
+            wordHTML += `</table>`;
+
+            // Absent list
+            const absents = gridState.filter(s => s && typeof s === 'object' && absentSet.has(s.id));
+            wordHTML += `<br><div style="border-top:1px solid #000; padding-top:10px;"><strong>缺席名單：</strong><br>`;
+            wordHTML += absents.length > 0 ? absents.map(s => `${s.displayId} ${s.name}`).join('、') : "全員出席";
+            wordHTML += `</div>`;
+
+            const header = "<html xmlns:o='urn:schemas-microsoft-com:office:office' xmlns:w='urn:schemas-microsoft-com:office:word' xmlns='http://www.w3.org/TR/REC-html40'><head><meta charset='utf-8'><title>座位表</title></head><body>";
+            const footer = "</body></html>";
+            
+            downloadFile(header + wordHTML + footer, `座位表_${getDateTimeString()}.doc`, 'application/vnd.ms-word');
+        }
+
+        function getSeatHTML(index) {
+            const item = gridState[index];
+            let style = `border: 1px solid #000; height: 60px; text-align: center; width: 50%;`;
+            let content = "";
+
+            if (item === 'LOCKED') {
+                style += "background-color: #ddd;";
+                content = "X";
+            } else if (item && typeof item === 'object') {
+                const isAbsent = absentSet.has(item.id);
+                if(isAbsent) style += "background-color: #ffcccc; color: #cc0000;";
+                content = `<div style="font-size: 14pt; font-family: monospace; font-weight: bold;">${item.displayId}</div>
+                           <div style="font-size: 14pt;">${item.name}</div>
+                           ${isAbsent ? '<div style="font-size:9pt;">(缺席)</div>' : ''}`;
+            } else {
+                style += "border: 1px dashed #999;";
+                content = "<span style='color:#ccc'>空</span>";
+            }
+            return `<td style="${style}">${content}</td>`;
+        }
+
+        function exportToExcel() {
+             if (!gridState.some(x => x && typeof x === 'object')) {
+                alert("無資料可匯出！");
+                return;
+            }
+
+            let tableHTML = `<table border="1">
+                <tr><td colspan="6" style="background-color:#ffffcc; font-weight:bold; font-size:14pt; text-align:center;">文創教室座位與缺席紀錄</td></tr>
+                <tr><td colspan="6" style="text-align:right;">${document.getElementById('print-time').innerText}</td></tr>
+                <tr style="background-color:#eee; font-weight:bold;">
+                    <td>桌次</td><td>座位代碼</td><td>班級</td><td>座號</td><td>姓名</td><td>狀態</td>
+                </tr>`;
+
+            gridState.forEach((item, index) => {
+                if (item && typeof item === 'object') {
+                    const tableNum = Math.floor(index / 4) + 1;
+                    const isAbsent = absentSet.has(item.id);
+                    const status = isAbsent ? '缺席' : '出席';
+                    const colorStyle = isAbsent ? 'style="color:red; background-color:#ffeaea;"' : '';
+                    
+                    tableHTML += `<tr ${colorStyle}>
+                        <td>第 ${tableNum} 桌</td>
+                        <td style='mso-number-format:"\@";'>${item.displayId}</td>
+                        <td>${item.originalClass}</td>
+                        <td>${item.originalSeat}</td>
+                        <td>${item.name}</td>
+                        <td>${status}</td>
+                    </tr>`;
+                }
+            });
+
+            // Summary
+            tableHTML += `<tr><td colspan="6" style="background-color:#eee; font-weight:bold;">缺席名單統計</td></tr>`;
+            const absents = gridState.filter(s => s && typeof s === 'object' && absentSet.has(s.id));
+            
+            if(absents.length === 0) {
+                 tableHTML += `<tr><td colspan="6">全員出席</td></tr>`;
+            } else {
+                absents.forEach(s => {
+                    tableHTML += `<tr><td colspan="6" style="color:red;">${s.displayId} ${s.name}</td></tr>`;
+                });
+            }
+            tableHTML += `</table>`;
+
+            downloadFile(tableHTML, `名單紀錄_${getDateTimeString()}.xls`, 'application/vnd.ms-excel');
+        }
+
+        function downloadFile(content, filename, mimeType) {
+            const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+            const link = document.createElement("a");
+            if (link.download !== undefined) {
+                const url = URL.createObjectURL(blob);
+                link.setAttribute("href", url);
+                link.setAttribute("download", filename);
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+            }
+        }
+    </script>
+</body>
+</html>
